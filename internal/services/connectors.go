@@ -4,9 +4,11 @@ import (
 	"batch-connector/internal/models"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -21,10 +23,10 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-redis/redis/v8"
 	_ "github.com/go-sql-driver/mysql"
-	go_ora "github.com/sijms/go-ora/v2"
 	"github.com/hirochachacha/go-smb2"
 	"github.com/jlaffaye/ftp"
 	_ "github.com/lib/pq"
+	go_ora "github.com/sijms/go-ora/v2"
 	"github.com/streadway/amqp"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -88,6 +90,8 @@ func (s *ConnectorService) Connect(conn *models.Connection) {
 		s.connectMQTT(conn)
 	case "oracle":
 		s.connectOracle(conn)
+	case "elasticsearch", "es":
+		s.connectElasticsearch(conn)
 	default:
 		conn.Status = "failed"
 		conn.Message = fmt.Sprintf("不支持的服务类型: %s", conn.Type)
@@ -103,7 +107,7 @@ func (s *ConnectorService) connectRedis(conn *models.Connection) {
 	ctx := context.Background()
 	addr := net.JoinHostPort(conn.IP, conn.Port)
 	s.addLog(conn, fmt.Sprintf("连接地址: %s", addr))
-	
+
 	// 检查是否使用代理
 	if s.config.Proxy.Enabled {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
@@ -246,7 +250,7 @@ func (s *ConnectorService) getRedisDatabases(addr, password string, ctx context.
 func (s *ConnectorService) connectFTP(conn *models.Connection) {
 	addr := net.JoinHostPort(conn.IP, conn.Port)
 	s.addLog(conn, fmt.Sprintf("连接地址: %s", addr))
-	
+
 	// 检查是否使用代理
 	if s.config.Proxy.Enabled {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
@@ -392,7 +396,7 @@ func (s *ConnectorService) connectPostgreSQL(conn *models.Connection) {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
 		s.addLog(conn, "注意: PostgreSQL 连接暂不支持代理，将尝试直接连接")
 	}
-	
+
 	// 如果用户提供了用户名和密码，直接使用，跳过默认用户连接
 	if conn.User != "" && conn.Pass != "" {
 		s.addLog(conn, fmt.Sprintf("尝试用户 %s 密码认证", conn.User))
@@ -524,7 +528,7 @@ func (s *ConnectorService) connectMySQL(conn *models.Connection) {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
 		s.addLog(conn, "注意: MySQL 连接暂不支持代理，将尝试直接连接")
 	}
-	
+
 	// 如果提供了密码，直接使用密码认证
 	if conn.Pass != "" && conn.User != "" {
 		s.addLog(conn, fmt.Sprintf("尝试用户 %s 密码认证", conn.User))
@@ -617,7 +621,7 @@ func (s *ConnectorService) connectSQLServer(conn *models.Connection) {
 	}
 	server := net.JoinHostPort(conn.IP, port)
 	s.addLog(conn, fmt.Sprintf("目标 SQL Server 地址: %s", server))
-	
+
 	// 检查是否使用代理
 	if s.config.Proxy.Enabled {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
@@ -821,7 +825,7 @@ func (s *ConnectorService) connectRabbitMQ(conn *models.Connection) {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
 		s.addLog(conn, "注意: RabbitMQ 连接暂不支持代理，将尝试直接连接")
 	}
-	
+
 	var username, password string
 	var connected bool
 
@@ -1004,7 +1008,7 @@ func (s *ConnectorService) addLogForConnections(results *[]string, message strin
 func (s *ConnectorService) connectSSH(conn *models.Connection) {
 	addr := net.JoinHostPort(conn.IP, conn.Port)
 	s.addLog(conn, fmt.Sprintf("连接地址: %s", addr))
-	
+
 	// 检查是否使用代理
 	if s.config.Proxy.Enabled {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
@@ -1323,7 +1327,7 @@ func (s *ConnectorService) connectSMB(conn *models.Connection) {
 	}
 	addr := net.JoinHostPort(conn.IP, port)
 	s.addLog(conn, fmt.Sprintf("连接地址: %s", addr))
-	
+
 	// 检查是否使用代理
 	if s.config.Proxy.Enabled {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
@@ -1561,6 +1565,128 @@ func (s *ConnectorService) connectWMI(conn *models.Connection) {
 	s.addLog(conn, "✓ WMI 命令执行成功")
 }
 
+// connectElasticsearch 连接 Elasticsearch
+func (s *ConnectorService) connectElasticsearch(conn *models.Connection) {
+	port := conn.Port
+	if port == "" {
+		port = "9200"
+	}
+
+	hostInput := strings.TrimSpace(conn.IP)
+	if hostInput == "" {
+		conn.Status = "failed"
+		conn.Message = "连接失败: 未指定目标地址"
+		s.addLog(conn, "未指定目标地址")
+		return
+	}
+
+	defaultPath := "/_nodes"
+	requestPath := ""
+	scheme := "http"
+
+	lowerHost := strings.ToLower(hostInput)
+	if strings.HasPrefix(lowerHost, "http://") || strings.HasPrefix(lowerHost, "https://") {
+		if parsed, err := url.Parse(hostInput); err == nil {
+			scheme = parsed.Scheme
+			hostInput = parsed.Host
+			requestPath = parsed.RequestURI()
+		}
+	} else if strings.Contains(hostInput, "/") {
+		parts := strings.SplitN(hostInput, "/", 2)
+		hostInput = parts[0]
+		requestPath = "/" + parts[1]
+	}
+
+	if requestPath == "" || requestPath == "/" {
+		requestPath = defaultPath
+	}
+
+	normalizedHost := hostInput
+	if _, _, err := net.SplitHostPort(normalizedHost); err != nil {
+		normalizedHost = net.JoinHostPort(normalizedHost, port)
+	}
+
+	baseURL := fmt.Sprintf("%s://%s", scheme, normalizedHost)
+	targetURL := baseURL + requestPath
+
+	s.addLog(conn, fmt.Sprintf("目标地址: %s", targetURL))
+	s.addLog(conn, fmt.Sprintf("请求路径: %s", requestPath))
+	if s.config.Proxy.Enabled {
+		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
+	}
+
+	transport := &http.Transport{
+		ResponseHeaderTimeout: 5 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		DisableKeepAlives:     true,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return s.dialContextWithProxy(ctx, network, address)
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		conn.Status = "failed"
+		conn.Message = fmt.Sprintf("创建请求失败: %v", err)
+		s.addLog(conn, conn.Message)
+		return
+	}
+	req.Header.Set("Accept", "application/json, text/plain;q=0.9, */*;q=0.8")
+	req.Header.Set("User-Agent", "AttackLogin-Elasticsearch-Scanner/1.0")
+
+	if conn.User != "" || conn.Pass != "" {
+		s.addLog(conn, "使用 Basic Auth 进行认证")
+		req.SetBasicAuth(conn.User, conn.Pass)
+	}
+
+	s.addLog(conn, "发送 HTTP 请求...")
+	resp, err := client.Do(req)
+	if err != nil {
+		conn.Status = "failed"
+		conn.Message = fmt.Sprintf("请求失败: %v", err)
+		s.addLog(conn, conn.Message)
+		return
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		conn.Status = "failed"
+		conn.Message = fmt.Sprintf("读取响应失败: %v", err)
+		s.addLog(conn, conn.Message)
+		return
+	}
+
+	body := strings.TrimSpace(string(bodyBytes))
+	if body == "" {
+		body = "(响应为空)"
+	}
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		s.addLog(conn, fmt.Sprintf("✓ HTTP %d 请求成功", resp.StatusCode))
+		conn.Status = "success"
+		conn.Message = fmt.Sprintf("连接成功（HTTP %d）", resp.StatusCode)
+		conn.Result = body
+		conn.ConnectedAt = time.Now()
+	} else {
+		s.addLog(conn, fmt.Sprintf("✗ 请求失败，状态码 %d", resp.StatusCode))
+		conn.Status = "failed"
+		conn.Message = fmt.Sprintf("连接失败（HTTP %d）", resp.StatusCode)
+		conn.Result = body
+	}
+}
+
 // connectMQTT 连接 MQTT
 func (s *ConnectorService) connectMQTT(conn *models.Connection) {
 	port := conn.Port
@@ -1569,7 +1695,7 @@ func (s *ConnectorService) connectMQTT(conn *models.Connection) {
 	}
 	addr := net.JoinHostPort(conn.IP, port)
 	s.addLog(conn, fmt.Sprintf("连接地址: %s", addr))
-	
+
 	// 检查是否使用代理
 	if s.config.Proxy.Enabled {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
@@ -1758,7 +1884,7 @@ func (s *ConnectorService) connectOracle(conn *models.Connection) {
 	}
 	addr := net.JoinHostPort(conn.IP, port)
 	s.addLog(conn, fmt.Sprintf("目标 Oracle 数据库地址: %s", addr))
-	
+
 	// 检查是否使用代理
 	if s.config.Proxy.Enabled {
 		s.addLog(conn, fmt.Sprintf("使用 SOCKS5 代理: %s:%s", s.config.Proxy.Host, s.config.Proxy.Port))
@@ -1804,7 +1930,7 @@ func (s *ConnectorService) connectOracle(conn *models.Connection) {
 	// 尝试不同的服务名
 	for _, serviceName := range serviceNames {
 		s.addLog(conn, fmt.Sprintf("尝试服务名: %s", serviceName))
-		
+
 		var dsn string
 		if password != "" {
 			dsn = go_ora.BuildUrl(conn.IP, portInt, serviceName, username, password, nil)
@@ -1854,11 +1980,11 @@ func (s *ConnectorService) connectOracle(conn *models.Connection) {
 		s.addLog(conn, "尝试默认用户 scott/tiger 连接")
 		username = "scott"
 		password = "tiger"
-		
+
 		for _, serviceName := range serviceNames {
 			s.addLog(conn, fmt.Sprintf("尝试服务名: %s (用户: scott/tiger)", serviceName))
 			dsn := go_ora.BuildUrl(conn.IP, portInt, serviceName, username, password, nil)
-			
+
 			db, err = sql.Open("oracle", dsn)
 			if err != nil {
 				continue

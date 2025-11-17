@@ -82,6 +82,10 @@
                         <span class="category-name">Oracle</span>
                         <span class="category-count" id="count-Oracle">0</span>
                     </a>
+                    <a href="#" class="category-item" data-type="Elasticsearch" onclick="selectCategory(event, 'Elasticsearch')">
+                        <span class="category-name">Elasticsearch</span>
+                        <span class="category-count" id="count-Elasticsearch">0</span>
+                    </a>
                 </nav>
             </aside>
 
@@ -134,7 +138,7 @@
                 <button class="modal-close" onclick="closeModal('proxy-modal')">&times;</button>
             </div>
             <div class="modal-body">
-                <p class="hint">代理目前以 SOCKS5 形式应用于支持的服务（SSH、Redis、SMB 等）。</p>
+                <p class="hint">代理目前以 SOCKS5 形式应用于支持的服务（SSH、Redis、SMB 等）。建议使用 Proxifier 进行代理设置。</p>
                 <form id="proxy-form">
                     <div class="form-group">
                         <label class="checkbox-wrapper" style="margin-bottom: 0;">
@@ -220,6 +224,7 @@
                             <option value="WMI">WMI</option>
                             <option value="MQTT">MQTT</option>
                             <option value="Oracle">Oracle</option>
+                            <option value="Elasticsearch">Elasticsearch</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -273,6 +278,7 @@
                             <option value="WMI">WMI</option>
                             <option value="MQTT">MQTT</option>
                             <option value="Oracle">Oracle</option>
+                            <option value="Elasticsearch">Elasticsearch</option>
                         </select>
                     </div>
                     <div class="form-group">

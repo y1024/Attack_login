@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 # 项目名称
 PROJECT_NAME="attack_login"
-VERSION=${VERSION:-"1.0.0"}
+VERSION=${VERSION:-"1.1.0"}
 
 # 输出目录
 OUTPUT_DIR="build"
