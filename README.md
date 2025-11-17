@@ -43,7 +43,7 @@
 
 ### 方式一：使用编译好的二进制文件
 
-1. 从 [Releases](https://github.com/your-repo/releases) 下载对应平台的压缩包
+1. 从 [Releases](https://github.com/ChinaRan0/Attack_login/releases) 下载对应平台的压缩包
 2. 解压后运行可执行文件
 3. 访问 `http://localhost:18921`
 
@@ -51,7 +51,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-repo/attack_login.git
+git clone https://github.com/ChinaRan0/Attack_login.git
 cd attack_login
 
 # 安装依赖
@@ -596,7 +596,7 @@ MIT License
 
 如有问题或建议，请通过以下方式联系：
 
-- GitHub Issues
+- [GitHub Issues](https://github.com/ChinaRan0/Attack_login/issues)
 - 公众号：知攻善防实验室
 
 ---
