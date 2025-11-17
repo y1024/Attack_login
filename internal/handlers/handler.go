@@ -10,20 +10,45 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	sessionCookieName = "session_token"
+	sessionMaxAge     = 3600 * 24 * 7
+)
+
 type Handler struct {
-	service *services.ConnectorService
-	config  *config.Config
+	service  *services.ConnectorService
+	config   *config.Config
+	sessions *SessionManager
 }
 
 func NewHandler(service *services.ConnectorService) *Handler {
 	cfg, _ := config.LoadConfig()
 	return &Handler{
-		service: service,
-		config:  cfg,
+		service:  service,
+		config:   cfg,
+		sessions: NewSessionManager(7 * 24 * time.Hour),
+	}
+}
+
+// AuthMiddleware 认证中间件
+func (h *Handler) AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, err := c.Cookie(sessionCookieName)
+		if err != nil || !h.sessions.ValidateSession(token) {
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "未授权，请先登录"})
+			} else {
+				c.Redirect(http.StatusFound, "/login")
+			}
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }
 
@@ -51,13 +76,19 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 
 	// 设置 session cookie
-	c.SetCookie("authenticated", "true", 3600*24*7, "/", "", false, true)
+	token := h.sessions.CreateSession()
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(sessionCookieName, token, sessionMaxAge, "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"message": "登录成功"})
 }
 
 // Logout 登出
 func (h *Handler) Logout(c *gin.Context) {
-	c.SetCookie("authenticated", "", -1, "/", "", false, true)
+	if token, err := c.Cookie(sessionCookieName); err == nil {
+		h.sessions.RevokeSession(token)
+	}
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(sessionCookieName, "", -1, "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"message": "已登出"})
 }
 

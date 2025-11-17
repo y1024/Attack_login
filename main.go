@@ -5,31 +5,9 @@ import (
 	"batch-connector/internal/services"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
-
-// 认证中间件
-func authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// 检查 cookie
-		authenticated, err := c.Cookie("authenticated")
-		if err != nil || authenticated != "true" {
-			// 如果是 API 请求，返回 JSON 错误
-			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "未授权，请先登录"})
-				c.Abort()
-				return
-			}
-			// 如果是页面请求，重定向到登录页
-			c.Redirect(http.StatusFound, "/login")
-			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
 
 func main() {
 	// 初始化服务
@@ -53,7 +31,7 @@ func main() {
 
 	// 需要认证的路由
 	authorized := r.Group("/")
-	authorized.Use(authMiddleware())
+	authorized.Use(handler.AuthMiddleware())
 	{
 		authorized.GET("/", handler.Index)
 		authorized.POST("/api/import", handler.ImportCSV)
